@@ -1,0 +1,211 @@
+/*
+ * File:   main.c
+ * Author: local
+ *
+ * Created on 3 kwietnia 2024, 16:52
+ */
+
+// CONFIG2
+#pragma config POSCMOD = NONE
+#pragma config OSCIOFNC = OFF
+#pragma config FCKSM = CSDCMD
+#pragma config FNOSC = FRC
+#pragma config IESO = OFF
+
+// CONFIG1
+#pragma config WDTPS = PS32768
+#pragma config FWPSA = PR128
+#pragma config WINDIS = ON
+#pragma config FWDTEN = OFF
+#pragma config ICS = PGx2
+#pragma config GWRP = OFF
+#pragma config GCP = OFF
+#pragma config JTAGEN = OFF
+
+#include <xc.h>
+#include <libpic30.h>
+
+// Makro do wyciągania wartości bitu (bity liczymy od zera)
+#define GET_BIT(value, noBit) (((value) >> (noBit)) & 1)
+
+// Deklaracje zmiennych
+static unsigned int pValue      = 0;   // zastępuje portValue
+static unsigned int bcdCnt      = 0;   // zastępuje bcdValue
+static unsigned int snakePos    = 0;   // zastępuje snakeMove
+static unsigned int snakeDir    = 1;
+static unsigned int qMove       = 0;   // zastępuje queueMove
+static unsigned int qBuffer     = 0;   // zastępuje queueBuffor
+static unsigned int bcdTens     = 0;   // zastępuje tens
+static unsigned int bcdOnes     = 0;   // zastępuje ones
+static unsigned int qEnd        = 0;   // zastępuje queueEnd
+static unsigned int shiftIndex  = 7;   // zastępuje iq
+static unsigned int prngVal     = 1;   // zastępuje val
+static unsigned int xoredBit    = 0;   // zastępuje xor
+
+// Flagi do odczytu przycisków
+static char prevRD6 = 1;  // poprzedni stan RD6 (zastępuje prevS6)
+static char prevRD7 = 1;  // poprzedni stan RD7 (zastępuje prevS7)
+static char currRD6 = 0;  // obecny stan RD6 (zastępuje currentS6)
+static char currRD7 = 0;  // obecny stan RD7 (zastępuje currentS7)
+
+static char activeProgram = 0; // zastępuje program
+
+// Funkcja obliczająca sprzężenie zwrotne (b1110011)
+int feedbackCalc(unsigned int val) {
+    // Maska: bity 0,1,2,5,6
+    return (GET_BIT(val, 0) ^ GET_BIT(val, 1) ^
+            GET_BIT(val, 2) ^ GET_BIT(val, 5) ^
+            GET_BIT(val, 6));
+}
+
+// Obsługa przerwania od Timera1
+void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void) {
+    
+    switch (activeProgram) {
+        // 1. Licznik binarny w górę (0…255)
+        case 0:
+            pValue++;
+            LATA = pValue;
+            break;
+        
+        // 2. Licznik binarny w dół (255…0)
+        case 1:
+            pValue--;
+            LATA = pValue;
+            break;
+        
+        // 3. Licznik w kodzie Graya w górę (0…255)
+        case 2:
+            pValue++;
+            LATA = (pValue >> 1) ^ pValue;
+            break;
+        
+        // 4. Licznik w kodzie Graya w dół (255…0)
+        case 3:
+            pValue--;
+            LATA = (pValue >> 1) ^ pValue;
+            break;
+        
+        // 5. 2x4 bitowy licznik BCD w górę (0…99)
+        case 4:
+            bcdCnt++;
+            bcdOnes = bcdCnt % 10;
+            bcdTens = (bcdCnt - bcdOnes) / 10;
+            LATA = (bcdTens << 4) | bcdOnes; 
+            break;
+        
+        // 6. 2x4 bitowy licznik BCD w dół (99…0)
+        case 5:
+            bcdCnt--;
+            bcdOnes = bcdCnt % 10;
+            bcdTens = (bcdCnt - bcdOnes) / 10;
+            LATA = (bcdTens << 4) | bcdOnes;
+            break;
+        
+        // 7. 3-bitowy wężyk (lewo-prawo)
+        case 6:
+            if (snakeDir == 1) {
+                if (snakePos == 5) {
+                    snakeDir = 0;
+                }
+                snakePos++;
+                LATA = (0x07 << snakePos); 
+            } else {
+                if (snakePos == 0) {
+                    snakeDir = 1;
+                }
+                snakePos--;
+                LATA = (0x07 << snakePos);
+            }
+            break;
+        
+        // 8. Kolejka
+        case 7:
+            qMove = (1 << qBuffer);
+            if (qBuffer == shiftIndex) {
+                qEnd = 255 - ((1 << shiftIndex) - 1); 
+                shiftIndex--;
+                qMove     = 0;
+                qBuffer   = 0;
+                LATA      = qEnd;
+            } else {
+                LATA = qEnd | qMove;
+                qBuffer++;
+            }
+            break;
+        
+        // 9. 6-bitowy generator liczb pseudolosowych
+        //    (na bazie sprzężenia b1110011)
+        case 8:
+            // Powtarzamy kilka razy w jednym przerwaniu
+            for(int i = 0; i < 5; i++) {
+                xoredBit = feedbackCalc(prngVal);
+                prngVal  = prngVal >> 1;
+                prngVal |= (xoredBit << 7);
+                LATA = prngVal;
+            }
+            break;
+    }
+    
+    _T1IF = 0; // Kasowanie flagi przerwania
+}
+
+int main(void) {
+    // Konfiguracja portów
+    TRISA = 0x0000; // PORTA jako wyjście
+    TRISD = 0xFFFF; // PORTD jako wejście (przyciski)
+
+    // Timer1: preskaler 1:256, włączony
+    T1CON = 0x8030; 
+    PR1   = 0x0FFF; 
+
+    // Przerwanie Timera1
+    _T1IE = 1; 
+    _T1IP = 1; 
+
+    while(1) {
+        // Zapamiętujemy stany przycisków przed krótkim opóźnieniem
+        prevRD6 = PORTDbits.RD6;
+        prevRD7 = PORTDbits.RD7;
+        
+        // Krótkie opóźnienie na eliminację drgań styków
+        __delay32(15000);
+        
+        // Pobieramy aktualne stany przycisków
+        currRD6 = PORTDbits.RD6;
+        currRD7 = PORTDbits.RD7;
+        
+        // Przyciski: RD6 -> poprzedni program, RD7 -> następny program
+        if ((currRD6 - prevRD6) == -1) {
+            activeProgram--;
+        }
+        if ((currRD7 - prevRD7) == -1) {
+            activeProgram++;
+        }
+        
+        // Zakres 0..8 (9 programów)
+        if (activeProgram > 8) {
+            activeProgram = 0;
+        } 
+        if (activeProgram < 0) {
+            activeProgram = 8;
+        }
+        
+        // Kontrola poprawnych zakresów (BCD, kolejka itp.)
+        if (bcdCnt > 99) {
+            bcdCnt = 1;
+        }
+        if (bcdCnt == 0) {
+            bcdCnt = 99;
+        }
+        if (qBuffer > 8) {
+            qBuffer = 0;
+        }
+        if (shiftIndex == 0) {
+            shiftIndex = 7;
+            qBuffer    = 0;
+            qEnd       = 0;
+        }
+    }
+    return 0;
+}
