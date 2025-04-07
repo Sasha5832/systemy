@@ -105,19 +105,21 @@ void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void) {
         // 7. 3-bitowy wężyk (lewo-prawo)
         case 6:
             if (snakeDir == 1) {
-                if (snakePos == 5) {
-                    snakeDir = 0;
+                if (snakePos >= 5) {
+                   snakeDir = 0;
+                } else {
+                    snakePos++;
                 }
-                snakePos++;
-                LATA = (0x07 << snakePos); 
             } else {
                 if (snakePos == 0) {
                     snakeDir = 1;
+                } else {
+                    snakePos--;
                 }
-                snakePos--;
-                LATA = (0x07 << snakePos);
             }
+            LATA = (0x07 << snakePos);
             break;
+
         
         // 8. Kolejka
         case 7:
