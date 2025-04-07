@@ -1,238 +1,219 @@
-/*
- * File:   main.c
- * Author: local
- *
- * Created on 7 kwietnia 2025, 9:58
- */
-
-//----------------------------------------------------------------------------
-// KONFIGURACJA
-//----------------------------------------------------------------------------
-#pragma config POSCMOD = NONE       // Primary Oscillator Select (HS Oscillator mode selected)
-#pragma config OSCIOFNC = OFF       // Primary Oscillator Output Function (OSC2/CLKO/RC15 functions as CLKO (FOSC/2))
-#pragma config FCKSM = CSDCMD       // Clock Switching and Monitor (disabled)
-#pragma config FNOSC = FRC          // Oscillator Select (FRC)
-#pragma config IESO = OFF           // Internal External Switch Over Mode (disabled)
-
-// CONFIG1
-#pragma config WDTPS = PS32768      // Watchdog Timer Postscaler (1:32,768)
-#pragma config FWPSA = PR128        // WDT Prescaler (1:128)
-#pragma config WINDIS = ON          // Standard Watchdog Timer
-#pragma config FWDTEN = OFF         // Watchdog Timer disabled
-#pragma config ICS = PGx2           // Comm Channel Select
-#pragma config GWRP = OFF           // General Code Segment Write Protect (disabled)
-#pragma config GCP = OFF            // General Code Segment Code Protect (disabled)
-#pragma config JTAGEN = OFF         // JTAG Port Enable (disabled)
-
-//----------------------------------------------------------------------------
-// BIBLIOTEKI
-//----------------------------------------------------------------------------
+#include <stdio.h>
+#include <stdlib.h>
 #include "xc.h"
 #include <libpic30.h>
-#include <math.h>
 
-//----------------------------------------------------------------------------
-// DEFINICJE I ZMIENNE GLOBALNE
-//----------------------------------------------------------------------------
-#define BIT_VALUE(value,noBit) ((value >> (noBit)) & 1)
+// CONFIG2
+#pragma config POSCMOD = NONE             // Primary Oscillator Select (primary oscillator disabled)
+#pragma config OSCIOFNC = OFF           // Primary Oscillator Output Function (OSC2/CLKO/RC15 functions as CLKO (FOSC/2))
+#pragma config FCKSM = CSDCMD           // Clock Switching and Monitor (Clock switching and Fail-Safe Clock Monitor are disabled)
+#pragma config FNOSC = FRC              // Oscillator Select (Fast RC Oscillator without Postscaler)
+#pragma config IESO = OFF               // Internal External Switch Over Mode (IESO mode (Two-Speed Start-up) disabled)
+// CONFIG1
+#pragma config WDTPS = PS32768 // Watchdog Timer Postscaler (1:32,768)
+#pragma config FWPSA = PR128 // WDT Prescaler (1:128)
+#pragma config WINDIS = ON // Watchdog Timer Window Mode disabled
+#pragma config FWDTEN = OFF // Watchdog Timer disabled
+#pragma config ICS = PGx2 // Emulator/debugger uses EMUC2/EMUD2
+#pragma config GWRP = OFF // Writes to program memory allowed
+#pragma config GCP = OFF // Code protection is disabled
+#pragma config JTAGEN = OFF // JTAG port is disabled
 
-// Zmienne używane w liczeniu, przechowywaniu stanów, itp.
-unsigned portValue    = 0;
-unsigned bcdValue     = 0;
-unsigned snakeMove    = 0;
-unsigned snakeDir     = 1;
-unsigned queueMove    = 0;
-unsigned queueBuffor  = 0;
-unsigned tens         = 0;
-unsigned ones         = 0;
-unsigned queueEnd     = 0;
-unsigned iq           = 7;
-unsigned counter      = 0;  // w oryginale jest, choć nieużywany
-unsigned BIT          = 0;  // w oryginale jest, choć nieużywany
+#define FCY     4000000UL                // Zdefiniowana cz?stotliwo?? zegara
+#define LCD_E   LATDbits.LATD4           // Pin dla sygna?u E (enable) na ekranie LCD
+#define LCD_RW  LATDbits.LATD5           // Pin dla sygna?u RW (Read/Write) na ekranie LCD
+#define LCD_RS  LATBbits.LATB15          // Pin dla sygna?u RS (Register Select) na ekranie LCD
+#define LCD_MSG LATE                     // Wiadomo?? dla ekranu LCD
 
-// Zmienne do obsługi przycisków
-char prevS6     = 6;
-char prevS7     = 7;
-char currentS6  = 0;
-char currentS7  = 0;
-char program    = 0;
+#define LCD_CLEAR       0x01             // Kod instrukcji do czyszczenia ekranu LCD
+#define LCD_HOME        0x02             // Kod instrukcji do ustawienia kursora na pocz?tku ekranu LCD
+#define LCD_ON          0x0C             // Kod instrukcji w??czaj?cej wy?wietlacz LCD
+#define LCD_OFF         0x08             // Kod instrukcji wy??czaj?cej wy?wietlacz LCD
+#define LCD_CONFIG      0x38             // Kod instrukcji konfiguracyjnej dla interfejsu 8-bitowego LCD
+#define LCD_CURSOR      0x80             // Kod instrukcji ustawiaj?cej kursor na pozycji okre?lonej przez u?ytkownika
+#define LINE1           0x00             // Adres pocz?tkowy pierwszej linii ekranu LCD
+#define LINE2           0x40             // Adres pocz?tkowy drugiej linii ekranu LCD
+#define LCD_CUST_CHAR   0x40             // Rozpocz?cie tworzenia niestandardowych znaków na ekranie LCD
+#define LCD_SHIFT_R     0x1D             // Przesuni?cie kursora w prawo
+#define LCD_SHIFT_L     0x1B             // Przesuni?cie kursora w lewo
 
-// Zmienne do generatora pseudolosowego
-int val = 1;
-int xor = 0;
-
-//----------------------------------------------------------------------------
-// FUNKCJA SPRZĘŻENIA (identyczna jak w oryginale)
-//----------------------------------------------------------------------------
-int sprzezenie(unsigned int v) {
-    // Sprzężenie w oparciu o b1110011
-    return BIT_VALUE(v,0)
-         ^ BIT_VALUE(v,1)
-         ^ BIT_VALUE(v,2)
-         ^ BIT_VALUE(v,5)
-         ^ BIT_VALUE(v,6);
+// Funkcja opó?niaj?ca wykonanie w mikrosekundach
+void __delay_us(unsigned long us){
+    __delay32(FCY/1000000 * us);
 }
 
-//----------------------------------------------------------------------------
-// FUNKCJA PRZERWANIA TIMERA1
-//----------------------------------------------------------------------------
-void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void) {
-    
-    switch (program) {
-
-        // 1. Licznik binarny od 0 do 255
-        case 0:
-            portValue++;
-            LATA = portValue;
-            break;
-
-        // 2. Licznik binarny od 255 do 0
-        case 1:
-            portValue--;
-            LATA = portValue;
-            break;
-
-        // 3. Licznik w kodzie Graya od 0 do 255
-        case 2:
-            portValue++;
-            LATA = (portValue >> 1) ^ portValue;
-            break;
-
-        // 4. Licznik w kodzie Graya od 255 do 0
-        case 3:
-            portValue--;
-            LATA = (portValue >> 1) ^ portValue;
-            break;
-
-        // 5. Licznik BCD od 0 do 99
-        case 4:
-            bcdValue++;
-            ones = bcdValue % 10;
-            tens = (bcdValue - ones) / 10;
-            LATA = (tens * pow(2,4)) + ones;
-            break;
-
-        // 6. Licznik BCD od 99 do 0
-        case 5:
-            bcdValue--;
-            ones = bcdValue % 10;
-            tens = (bcdValue - ones) / 10;
-            LATA = (tens * pow(2,4)) + ones;
-            break;
-
-        // 7. Wężyk poruszający się lewo-prawo (3-bitowy)
-        case 6:
-            if (snakeDir == 1) {
-                if (snakeMove == 5) {
-                    snakeDir = 0;
-                }
-                snakeMove++;
-                LATA = 7 * pow(2, snakeMove);
-
-            } else {
-                if (snakeMove == 0) {
-                    snakeDir = 1;
-                }
-                snakeMove--;
-                LATA = 7 * pow(2, snakeMove);
-            }
-            break;
-
-        // 8. Kolejka
-        case 7:
-            queueMove = 1 * pow(2, queueBuffor);
-            if (queueBuffor == iq) {
-                queueEnd = 255 - (pow(2, iq) - 1);
-                iq--;
-                queueMove    = 0;
-                queueBuffor  = 0;
-                LATA         = queueEnd;
-            }
-            else {
-                LATA = queueEnd + queueMove;
-                queueBuffor++;
-            }
-            break;
-
-        // 9. Generator liczb pseudolosowych w oparciu o b1110011
-        case 8:
-            for(int i = 0; i < 5; i++) {
-                xor = sprzezenie(val);
-                val = val >> 1;
-                val += (xor << 7);
-                LATA = val;
-            }
-            break;
-    }
-    
-    _T1IF = 0;  // skasowanie flagi przerwania
+// Funkcja opó?niaj?ca wykonanie w milisekundach
+void __delay_ms(unsigned long m){
+    __delay32(FCY/1000 * m);
 }
 
-//----------------------------------------------------------------------------
-// FUNKCJE POMOCNICZE DO OBSŁUGI PRZYCISKÓW I ZAKRESÓW
-//----------------------------------------------------------------------------
-void odczytajPrzyciski(void) {
-    // Zapamiętanie stanu przycisków przed krótkim opóźnieniem
-    prevS6 = PORTDbits.RD6;
-    prevS7 = PORTDbits.RD7;
-    __delay32(15000);     // eliminacja drgań styków
-    currentS6 = PORTDbits.RD6;
-    currentS7 = PORTDbits.RD7;
+// Funkcja wysy?aj?ca komend? do ekranu LCD
+void LCD_sendCommand(char command){
+    LCD_RW = 0;                         // Ustawienie pinu RW na 0
+    LCD_RS = 0;                         // Ustawienie pinu RS na 0
+    LCD_E = 1;                          // Ustawienie pinu E na 1
+    LCD_MSG = command;                  // Wys?anie komendy do ekranu
+    __delay_us(50);                     // Oczekiwanie na stabilizacj?
+    LCD_E = 0;                          // Wy??czenie sygna?u E
+}
 
-    // Przyciśnięcie RD6 -> poprzedni program
-    if ((currentS6 - prevS6) == -1) {
-        program--;
-    }
-    // Przyciśnięcie RD7 -> następny program
-    if ((currentS7 - prevS7) == -1) {
-        program++;
+// Funkcja wysy?aj?ca dane do ekranu LCD
+void LCD_sendData(char data){
+    LCD_RW = 0;                         // Ustawienie pinu RW na 0
+    LCD_RS = 1;                         // Ustawienie pinu RS na 1
+    LCD_E = 1;                          // Ustawienie pinu E na 1
+    LCD_MSG = data;                     // Wys?anie danych do ekranu
+    __delay_us(50);                     // Oczekiwanie na stabilizacj?
+    LCD_E = 0;                          // Wy??czenie sygna?u E
+}
+
+// Funkcja drukuj?ca ci?g znaków na ekranie LCD
+void LCD_print(unsigned char* string){
+    while(*string){
+        LCD_sendData(*string++);        // Wys?anie pojedynczego znaku na ekran
     }
 }
 
-void sprawdzZakresProgramu(void) {
-    if (program > 8) program = 0;
-    if (program < 0) program = 8;
-}
-
-void kontrolaBCD(void) {
-    if (bcdValue > 99) bcdValue = 1;
-    if (bcdValue == 0) bcdValue = 99;
-}
-
-void kontrolaKolejki(void) {
-    if (queueBuffor > 8) queueBuffor = 0;
-    if (iq == 0) {
-        iq          = 7;
-        queueBuffor = 0;
-        queueEnd    = 0;
+// Funkcja ustawiaj?ca kursor na okre?lonej pozycji na ekranie LCD
+void LCD_setCursor(unsigned char row, unsigned char col){
+    unsigned char address;
+    if(row==1){
+        address = LCD_CURSOR + LINE1 + col; // Obliczenie adresu dla pierwszej linii
     }
+    if(row==2){
+        address = LCD_CURSOR + LINE2 + col; // Obliczenie adresu dla drugiej linii
+    }
+    LCD_sendCommand(address);                // Wys?anie komendy ustawiaj?cej kursor
 }
 
-//----------------------------------------------------------------------------
-// FUNKCJA MAIN
-//----------------------------------------------------------------------------
+// Funkcja inicjalizuj?ca ekran LCD
+void LCD_init(){
+    __delay_ms(20);                         // Oczekiwanie na stabilizacj? zasilania
+    LCD_sendCommand(LCD_CONFIG);            // Wys?anie komendy konfiguracji
+    __delay_us(50);                         // Oczekiwanie na stabilizacj?
+    LCD_sendCommand(LCD_ON);                // Wys?anie komendy w??czaj?cej LCD
+    __delay_us(50);                         // Oczekiwanie na stabilizacj?
+    LCD_sendCommand(LCD_CLEAR);             // Wys?anie komendy czyszczenia ekranu
+    __delay_ms(2);                          // Oczekiwanie na zako?czenie czyszczenia
+}
+
+int appemd(int i, int n){
+    return (i+1)%n;
+}
+// Funkcja opó?niaj?ca wykonywanie programu przez okre?lony czas
+void czas(){
+    __delay_ms(250);
+}
+
+// Funkcja konwertuj?ca liczb? zmiennoprzecinkow? na liczb? ca?kowit?
+int zmien(float a){
+    return (int)a;
+}
+
+unsigned int minuty1 = 0, minuty2 = 0, prog = 0, start = 0;
+char currentS6 = 0, currentS7 = 0, prevS6 = 0, prevS7 = 0;
+float sekundy1 = 30, sekundy2 = 30;
+
 int main(void) {
-    
-    // Ustawienia portów
-    TRISA = 0x0000; // PORTA jako wyjście
-    TRISD = 0xFFFF; // PORTD jako wejście
-    
-    // Konfiguracja Timera1
-    T1CON  = 0x8030; // Timer włączony, preskaler 1:256
-    _T1IE  = 1;      // Zezwolenie na przerwanie
-    _T1IP  = 1;      // Priorytet przerwania
-    PR1    = 0x0FFF; // Okres przerwań
-    
-    while(1) {
-        // Odczyt i obsługa przycisków
-        odczytajPrzyciski();
-        // Upewnienie się, że program mieści się w zakresie 0..8
-        sprawdzZakresProgramu();
-        // Kontrola zakresu licznika BCD
-        kontrolaBCD();
-        // Kontrola parametrów „kolejki”
-        kontrolaKolejki();
+    TRISA = 0x0000;
+    TRISB = 0x7FFF;
+    TRISD = 0xFFE7;
+    TRISE = 0x0000;
+
+    LCD_init(); // Inicjalizacja ekranu LCD
+
+    char buffer[16]; // Bufor dla danych
+
+    while(1){
+        prevS6 = PORTDbits.RD6;
+        prevS7 = PORTDbits.RD7;
+        __delay_ms(100);
+        currentS6 = PORTDbits.RD6;
+        currentS7 = PORTDbits.RD7;
+        LCD_sendCommand(LCD_CLEAR);
+        __delay_ms(1);
+
+        if(start == 0){
+            if(currentS6 - prevS6 == 1){
+                start++;
+            }
+            if(currentS7 - prevS7 == 1){
+                sekundy1 += 30;
+                sekundy2 += 30;
+                if(sekundy1 >= 59){
+                    minuty1++;
+                    sekundy1 = 0;
+                    minuty2++;
+                    sekundy2 = 0;
+                }
+                if(minuty1 >= 6){
+                    minuty1 = 0;
+                    sekundy1 = 30;
+                    minuty2 = 0;
+                    sekundy2 = 30;
+                }
+            }
+            sprintf(buffer, "Time: %u:%02u", minuty1, zmien(sekundy1));
+            LCD_setCursor(1,0);
+            LCD_print((unsigned char*)buffer);
+        }
+        else{
+            if(zmien == 0){
+                if(zmien(sekundy1 <= 0)){
+                    sekundy1 = 59;
+                }
+                if(zmien(sekundy1) == 59){
+                    sekundy1 = 59;
+                    minuty1--;
+                }
+                if(minuty1 == 0 && zmien(sekundy1) == 0){
+                    while(1){
+                        LCD_setCursor(1,0);
+                        LCD_print("END");
+                        LCD_setCursor(2,0);
+                        LCD_print("Player 1");
+                    }
+
+                }
+                sprintf(buffer, "%u:%02u", minuty1, zmien(sekundy1));
+                LCD_setCursor(1,0);
+                LCD_print((unsigned char*)buffer);
+                LCD_setCursor(2,0);
+                LCD_print("Player 1");
+                sekundy1-=0.15;
+                __delay_ms(50);
+            }
+            if(zmien == 1){
+                if(zmien(sekundy2 <= 0)){
+                    sekundy2 = 59;
+                }
+                if(zmien(sekundy2) == 59){
+                    minuty2--;
+                }
+                if(minuty2 == 0 && zmien(sekundy2) == 0){
+                    while(1){
+                        LCD_setCursor(1,0);
+                        LCD_print("END");
+                        LCD_setCursor(2,0);
+                        LCD_print("Player 2");
+                    }
+                }
+                sprintf(buffer, "%u:%02u", minuty2, zmien(sekundy2));
+                LCD_setCursor(1,0);
+                LCD_print((unsigned char*)buffer);
+                LCD_setCursor(2,0);
+                LCD_print("Player 2");
+                sekundy2-=0.15;
+                __delay_ms(50);
+            }
+            if(currentS6 - prevS6 == 1){
+                prog++;
+                if(prog > 1)
+                    prog = 0;
+            }
+        }
+
     }
-    
-    return 0;
+
 }
+
