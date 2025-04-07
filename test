@@ -1,0 +1,90 @@
+/* 
+ * File:   main.c
+ * Author: local
+ *
+ * Created on March 24, 2025, 10:39 AM
+ */
+
+// CONFIG2
+#pragma config POSCMOD = NONE           // Primary Oscillator Select (HS Oscillator mode selected)
+#pragma config OSCIOFNC = OFF           // Primary Oscillator Output Function (OSC2/CLKO/RC15 functions as CLKO (FOSC/2))
+#pragma config FCKSM = CSDCMD           // Clock Switching and Monitor (Clock switching and Fail-Safe Clock Monitor are disabled)
+#pragma config FNOSC = FRC              // Oscillator Select (Primary Oscillator with PLL module (HSPLL, ECPLL))
+#pragma config IESO = OFF               // Internal External Switch Over Mode (IESO mode (Two-Speed Start-up) disabled)
+
+// CONFIG1
+#pragma config WDTPS = PS32768          // Watchdog Timer Postscaler (1:32,768)
+#pragma config FWPSA = PR128            // WDT Prescaler (Prescaler ratio of 1:128)
+#pragma config WINDIS = ON              // Watchdog Timer Window (Standard Watchdog Timer enabled,(Windowed-mode is disabled))
+#pragma config FWDTEN = OFF             // Watchdog Timer Enable (Watchdog Timer is disabled)
+#pragma config ICS = PGx2               // Comm Channel Select (Emulator/debugger uses EMUC2/EMUD2)
+#pragma config GWRP = OFF               // General Code Segment Write Protect (Writes to program memory are allowed)
+#pragma config GCP = OFF                // General Code Segment Code Protect (Code protection is disabled)
+#pragma config JTAGEN = OFF             // JTAG Port Enable (JTAG port is disabled)
+
+#include "xc.h"
+
+#include "p24FJ128GA010.h"
+
+unsigned portValue = 0, bcdValue = 0, snakeMove = 0, snakeDir = 1, queueMove = 0, queueBuffor = 0, tens = 0, ones = 0, queueEnd = 0, iq = 7, counter = 0, BIT = 0;
+char S6stare = 6, S7stare = 7, S6nowe = 0, S7nowe, nrProgramu = 0;
+int val = 1, xor = 0;
+    
+void __interrupt(no_auto_psv) _T1Interrupt(void){    // static variable for permanent storage duration    
+    
+    static unsigned char portValue = 0;    // write to port latch    
+    LATA = portValue++;    // clear this interrupt condition    
+     
+    // sprawdz ktory podprogram ma sie uruchomic
+    if (nrProgramu == 0){ // licznik binarny od 0 do 255
+        portValue++;
+        LATA = portValue;
+    }
+    if (nrProgramu == 1){ // licznik binarny od 255 do 0
+        portValue--;
+        LATA = portValue;
+    }
+    _T1IF = 0;
+}
+
+int main(void) {
+
+    unsigned char portValue;
+    int program = 0;
+    AD1PCFG = 0xFFFF; // set to digital I/O (not analog)    
+    TRISA = 0x0000;   // set all port bits to be output
+    T1CON = 0x8010; // timer 1 on, prescaler 1:8, internal clock    
+    _T1IE = 1; // enable interrupts for timer 1    
+    _T1IP = 0x001; // set interrupt priority (lowest)    
+    
+    while(1){
+        S6stare = PORTDbits.RD6;
+        S7stare = PORTDbits.RD7;
+        __delay32(15000);
+        S6nowe = PORTDbits.RD6;
+        S7nowe = PORTDbits.RD7;
+        
+        if(S6nowe-S6stare == -1){
+            program--;
+        }
+        if(S7nowe-S7stare == -1){
+            program++;
+        }
+        if(program > 8){
+            program = 0;
+        }
+        if(program < 0){
+            program = 8;
+        }
+        if(bcdValue > 99) bcdValue = 1;
+        if(bcdValue == 0) bcdValue = 99;
+        if(queueBuffor > 8) queueBuffor = 0;
+        if(iq == 0) iq = 7,queueBuffor = 0, queueEnd = 0;
+    }
+    
+   
+    
+    return 0;
+    
+}
+
