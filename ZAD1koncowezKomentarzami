@@ -24,16 +24,16 @@
 #pragma config GCP = OFF            // General Code Segment Code Protect (disabled)
 #pragma config JTAGEN = OFF         // JTAG Port Enable (disabled)
 
-//----------------------------------------------------------------------------
+
 // BIBLIOTEKI
-//----------------------------------------------------------------------------
+
 #include "xc.h"
 #include <libpic30.h>
 #include <math.h>
 
-//----------------------------------------------------------------------------
+
 // DEFINICJE I ZMIENNE GLOBALNE
-//----------------------------------------------------------------------------
+
 #define BIT_VALUE(value,noBit) ((value >> (noBit)) & 1)
 
 // Zmienne używane w liczeniu, przechowywaniu stanów, itp.
@@ -61,9 +61,7 @@ char program    = 0;
 int val = 1;
 int xor = 0;
 
-//----------------------------------------------------------------------------
-// FUNKCJA SPRZĘŻENIA (identyczna jak w oryginale)
-//----------------------------------------------------------------------------
+// FUNKCJA SPRZĘŻENIA 
 int sprzezenie(unsigned int v) {
     // Sprzężenie w oparciu o 1110011
     return BIT_VALUE(v,0)
@@ -73,9 +71,7 @@ int sprzezenie(unsigned int v) {
          ^ BIT_VALUE(v,6);
 }
 
-//----------------------------------------------------------------------------
 // FUNKCJA PRZERWANIA TIMERA1
-//----------------------------------------------------------------------------
 void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void) {
     
     switch (program) {
@@ -209,9 +205,7 @@ void kontrolaKolejki(void) {
     }
 }
 
-//----------------------------------------------------------------------------
 // FUNKCJA MAIN
-//----------------------------------------------------------------------------
 int main(void) {
     
     // Ustawienia portów
