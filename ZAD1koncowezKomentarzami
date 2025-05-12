@@ -47,21 +47,22 @@ unsigned  tens         = 0; //|
 unsigned  ones         = 0; //|
 unsigned  queueEnd     = 0; //|
 unsigned  iq           = 7; //|
-unsigned  counter      = 0; //
-unsigned  BIT          = 0; //
+
 
 // Zmienne do obsługi przycisków
-char prevS6     = 6;
-char prevS7     = 7;
-char currentS6  = 0;
-char currentS7  = 0;
-char program    = 0;
+char prevS6     = 6; //Detekcja zbocza (0 → 1) przycisków S6/S7.
+char prevS7     = 7; //|
+char currentS6  = 0; //|
+char currentS7  = 0; //|
+char program    = 0; //Aktualnie wybrany tryb 0‑8.
 
 // Zmienne do generatora pseudolosowego
-int val = 1;
-int xor = 0;
+int val = 1; //Rejestr i bit sprzężenia generatora pseudolosowego (LFSR 7‑bit).
+int xor = 0; //|
 
 // FUNKCJA SPRZĘŻENIA 
+// Zwraca XOR wybranych bitów rejestru v według maski 0b1110011 (tap‑y LFSR). 
+// Wynik jest dopisywany jako MSB przy każdej iteracji, generując sekwencję pseudolosową (255 ‑ cykli).
 int sprzezenie(unsigned int v) {
     // Sprzężenie w oparciu o 1110011
     return BIT_VALUE(v,0)
