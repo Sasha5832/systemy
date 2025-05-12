@@ -1,1 +1,234 @@
+/*
+ * File:   main.c
+ * Author: local
+ *
+ * Created on 7 kwietnia 2025, 9:58
+ */
 
+//----------------------------------------------------------------------------
+// KONFIGURACJA
+//----------------------------------------------------------------------------
+#pragma config POSCMOD = NONE       // Primary Oscillator Select (HS Oscillator mode selected)
+#pragma config OSCIOFNC = OFF       // Primary Oscillator Output Function (OSC2/CLKO/RC15 functions as CLKO (FOSC/2))
+#pragma config FCKSM = CSDCMD       // Clock Switching and Monitor (disabled)
+#pragma config FNOSC = FRC          // Oscillator Select (FRC)
+#pragma config IESO = OFF           // Internal External Switch Over Mode (disabled)
+
+// CONFIG1
+#pragma config WDTPS = PS32768      // Watchdog Timer Postscaler (1:32,768)
+#pragma config FWPSA = PR128        // WDT Prescaler (1:128)
+#pragma config WINDIS = ON          // Standard Watchdog Timer
+#pragma config FWDTEN = OFF         // Watchdog Timer disabled
+#pragma config ICS = PGx2           // Comm Channel Select
+#pragma config GWRP = OFF           // General Code Segment Write Protect (disabled)
+#pragma config GCP = OFF            // General Code Segment Code Protect (disabled)
+#pragma config JTAGEN = OFF         // JTAG Port Enable (disabled)
+
+
+// BIBLIOTEKI
+
+#include "xc.h"
+#include <libpic30.h>
+#include <math.h>
+
+
+// DEFINICJE I ZMIENNE GLOBALNE
+
+#define BIT_VALUE(value,noBit) ((value >> (noBit)) & 1)
+
+// Zmienne używane w liczeniu, przechowywaniu stanów, itp.
+unsigned  portValue    = 0; //Bieżąca wartość wysyłana na PORTA w trybach bin./Gray.
+unsigned  bcdValue     = 0; //Licznik w systemie BCD (0‑99).
+unsigned  snakeMove    = 0; //Pozycja i kierunek 3‑bitowego „wężyka”.
+unsigned  snakeDir     = 1; //|
+unsigned  queueMove    = 0; // Sterowanie efektem „kolejki”.
+unsigned  queueTemp  = 0;   //|
+unsigned  tens         = 0; //|
+unsigned  ones         = 0; //|
+unsigned  queueKon     = 0; //|
+unsigned  iq           = 7; //|
+
+
+// Zmienne do obsługi przycisków
+char prevFirst     = 6; //Detekcja zbocza (0 → 1) przycisków.
+char prevSecond     = 7; //|
+char currentFirst  = 0;  //|
+char currentSecond  = 0; //|
+char program    = 0; //Aktualnie wybrany tryb 0‑8.
+
+// Zmienne do generatora pseudolosowego
+int val = 1; //Rejestr i bit sprzężenia generatora pseudolosowego (LFSR 7‑bit).
+int xor = 0; //|
+
+// FUNKCJA SPRZĘŻENIA 
+// Zwraca XOR wybranych bitów rejestru v według maski 0b1110011 (tap‑y LFSR). 
+// Wynik jest dopisywany jako MSB przy każdej iteracji, generując sekwencję pseudolosową (255 ‑ cykli).
+int sprzezenie(unsigned int v) {
+    // Sprzężenie w oparciu o 1110011
+    return BIT_VALUE(v,0)
+         ^ BIT_VALUE(v,1)
+         ^ BIT_VALUE(v,2)
+         ^ BIT_VALUE(v,5)
+         ^ BIT_VALUE(v,6);
+}
+
+// FUNKCJA PRZERWANIA TIMERA1
+void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void) {
+    //Wybór trybu w zależności od zmiennej 'program'
+    switch (program) {
+
+        // 1. Licznik binarny od 0 do 255
+        case 0:
+            portValue++;       // inkrementacja zmiennej
+            LATA = portValue;  // prezentacja pełnej wartości na LED‑ach
+            break;
+
+        // 2. Licznik binarny od 255 do 0
+        case 1:
+            portValue--;       // dekrementacja wartości
+            LATA = portValue;  // wyjście równoległe
+            break;
+
+        // 3. Licznik w kodzie Graya od 0 do 255
+        case 2:
+            portValue++;                         // ++ w przestrzeni naturalnej
+            LATA = (portValue >> 1) ^ portValue; // konwersja na Gray – bity unikają gwałt. zmian
+            break;
+
+        // 4. Licznik w kodzie Graya od 255 do 0
+        case 3:
+            portValue--;
+            LATA = (portValue >> 1) ^ portValue; // Gray w dol
+            break;
+
+        // 5. Licznik BCD od 0 do 99
+        case 4:
+            bcdValue++;                        // ++ z przeniesieniem w human‑friendly postaci
+            ones = bcdValue % 10;              // jedności
+            tens = (bcdValue - ones) / 10;     // dziesiątki
+            LATA = (tens * pow(2,4)) + ones;   // "sklejenie" półbajtów
+            break;
+
+        // 6. Licznik BCD od 99 do 0
+        case 5:
+            bcdValue--;
+            ones = bcdValue % 10;
+            tens = (bcdValue - ones) / 10;
+            LATA = (tens * pow(2,4)) + ones;
+            break;
+
+        // 7. Wężyk poruszający się lewo-prawo (3-bitowy)
+        case 6:
+            if (snakeDir == 1) {       // kierunek ->
+                if (snakeMove >= 5) {
+                   snakeDir = 0;       // osiągnięto prawy skraj – zmiana kier.
+                } else {
+                    snakeMove++;       // przesunięcie wzorca o 1 bit w prawo
+                }
+            } else {                   // kierunek <-
+                if (snakeMove == 0) {
+                    snakeDir = 1;      // lewy skraj – obrót kierunku
+                } else {
+                    snakeMove--;       // 1 bit w lewo
+                }
+            }
+            LATA = (0x07 << snakeMove); // wzorzec 0b0000_0111 przesuwany w polu 0‑7
+            break;
+
+
+        // 8. Kolejka
+        case 7:
+            queueMove = 1 * pow(2, queueTemp); // wylicz: który bit zapalić w tej iteracji
+            if (queueTemp == iq) {             // czy został zapalony skrajny bit bieżącego bloku?
+                queueKon = 255 - (pow(2, iq) - 1);  // maska już zapalonych bitów (np. po 1. cyklu -> 0b1111_1110)
+                iq--;                          // zmniejsz zakres kolejki (przesuwamy się w lewo)
+                queueMove    = 0;              // nie zapalamy nowego bitu w tym przerwaniu
+                queueTemp  = 0;                 // reset licznika pozycji w nowym bloku
+                LATA         = queueKon;       // wyświetl aktualny stan
+            }
+            else {
+                LATA = queueKon + queueMove;   // OR z dotychczas świecącymi diodami
+                queueTemp++;                   // przejdź do kolejnego bitu w następnym przerwaniu
+            }
+            break;
+
+        // 9. Generator liczb pseudolosowych w oparciu o 1110011
+        case 8:
+            for(int i = 0; i < 5; i++) {
+                xor = sprzezenie(val);         // policz bit sprzężenia
+                val = val >> 1;                // przesunięcie w prawo
+                val += (xor << 7);             // wstaw nowy bit na MSB
+                LATA = val;                    // prezentacja wartości (0‑255)
+            }
+            break;
+    }
+    
+    _T1IF = 0;  // skasowanie flagi przerwania
+}
+
+
+// FUNKCJE POMOCNICZE DO OBSŁUGI PRZYCISKÓW I ZAKRESÓW
+void odczytajPrzyciski(void) {
+    // Zapamiętanie stanu przycisków przed krótkim opóźnieniem
+    prevFirst = PORTDbits.RD6;
+    prevSecond = PORTDbits.RD13;
+    __delay32(15000);     // eliminacja drgań styków 
+    //15 000 cykli opóźnienia dla eliminacji drgań.
+    currentFirst = PORTDbits.RD6;
+    currentSecond = PORTDbits.RD13;
+
+    // Przyciśnięcie RD6 -> poprzedni program
+    if ((currentFirst - prevFirst) == -1) {
+        program--;
+    }
+    // Przyciśnięcie RD13 -> następny program
+    if ((currentSecond - prevSecond) == -1) {
+        program++;
+    }
+}
+// Sprawdzanie numeru programu
+void sprawdzZakresProgramu(void) {
+    if (program > 8) program = 0;
+    if (program < 0) program = 8;
+}
+// Zmienna pomocnicza dla kodu BCD
+void kontrolaBCD(void) {
+    if (bcdValue > 99) bcdValue = 1;
+    if (bcdValue == 0) bcdValue = 99;
+}
+// Kontrola parametrów kolejki
+void kontrolaKolejki(void) {
+    if (queueTemp > 8) queueTemp = 0;
+    if (iq == 0) {
+        iq          = 7;
+        queueTemp = 0;
+        queueKon    = 0;
+    }
+}
+
+// FUNKCJA MAIN
+int main(void) {
+    
+    // Ustawienia portów
+    TRISA = 0x0000; // PORTA jako wyjście
+    TRISD = 0xFFFF; // PORTD jako wejście
+    
+    // Konfiguracja Timera1
+    T1CON  = 0x8030; // Timer włączony, preskaler 1:256
+    _T1IE  = 1;      // Zezwolenie na przerwanie
+    _T1IP  = 1;      // Priorytet przerwania
+    PR1    = 0x0FFF; // Okres przerwań
+    
+    while(1) {
+        // Odczyt i obsługa przycisków
+        odczytajPrzyciski();
+        // Upewnienie się, że program mieści się w zakresie 0..8
+        sprawdzZakresProgramu();
+        // Kontrola zakresu licznika BCD
+        kontrolaBCD();
+        // Kontrola parametrów kolejki
+        kontrolaKolejki();
+    }
+    
+    return 0;
+}
