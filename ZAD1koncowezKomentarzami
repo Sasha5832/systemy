@@ -37,18 +37,18 @@
 #define BIT_VALUE(value,noBit) ((value >> (noBit)) & 1)
 
 // Zmienne używane w liczeniu, przechowywaniu stanów, itp.
-unsigned  portValue    = 0;
-unsigned  bcdValue     = 0;
-unsigned  snakeMove    = 0;
-unsigned  snakeDir     = 1;
-unsigned  queueMove    = 0;
-unsigned  queueBuffor  = 0;
-unsigned  tens         = 0;
-unsigned  ones         = 0;
-unsigned  queueEnd     = 0;
-unsigned  iq           = 7;
-unsigned  counter      = 0;
-unsigned  BIT          = 0;
+unsigned  portValue    = 0; //Bieżąca wartość wysyłana na PORTA w trybach bin./Gray.
+unsigned  bcdValue     = 0; //Licznik w systemie BCD (0‑99).
+unsigned  snakeMove    = 0; //Pozycja i kierunek 3‑bitowego „wężyka”.
+unsigned  snakeDir     = 1; //|
+unsigned  queueMove    = 0; // Sterowanie efektem „kolejki” (narastające zapalanie się LED‑ów).
+unsigned  queueBuffor  = 0; //|
+unsigned  tens         = 0; //|
+unsigned  ones         = 0; //|
+unsigned  queueEnd     = 0; //|
+unsigned  iq           = 7; //|
+unsigned  counter      = 0; //
+unsigned  BIT          = 0; //
 
 // Zmienne do obsługi przycisków
 char prevS6     = 6;
