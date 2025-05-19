@@ -1,0 +1,123 @@
+#define FCY 4000000UL          
+#include <xc.h>
+#include <stdint.h>
+#include <libpic30.h>
+
+#pragma config POSCMOD = NONE, FNOSC = FRC
+#pragma config FCKSM = CSDCMD, IESO = OFF, OSCIOFNC = OFF
+#pragma config WDTPS = PS32768, FWPSA = PR128, FWDTEN = OFF, WINDIS = ON
+#pragma config ICS   = PGx2, GWRP = OFF,  GCP = OFF,  JTAGEN = OFF
+
+// Tabela opóźnień odpowiadających poziomom ADC (prędkościom)
+const unsigned long delays[] = {250000, 500000, 750000, 1000000, 1250000};
+
+// Wzorce do efektu wężyka
+const uint8_t snakeTable[] = {0x07, 0x0E, 0x1C, 0x38, 0x70, 0xE0, 0x70, 0x38, 0x1C, 0x0E, 0x07};
+
+// Odczyt poziomu prędkości z ADC
+unsigned char read_speed_level(unsigned int adc_value) {
+    if (adc_value < 200) return 0;
+    else if (adc_value < 400) return 1;
+    else if (adc_value < 600) return 2;
+    else if (adc_value < 800) return 3;
+    else return 4;
+}
+
+// Przekształcenie poziomu prędkości na wartość opóźnienia
+unsigned long get_delay_from_level(unsigned char level) {
+    return delays[level];
+}
+
+// Inicjalizacja ADC, przycisków i portów
+void init(void) {
+    TRISA = 0x0000;          // Port A jako wyjścia (dla LED)
+    LATA = 0x00;
+
+    TRISD |= (1 << 6) | (1 << 13); // RD6 i RD13 jako wejścia (przyciski)
+    TRISBbits.TRISB5 = 1;          // RB5 (AN5) jako wejście analogowe
+    AD1PCFG = 0xFFFF;              // Wszystkie piny jako cyfrowe
+    AD1PCFGbits.PCFG5 = 0;         // RB5 jako analogowe wejście
+
+    AD1CON1 = 0;                   // Konfiguracja ADC
+    AD1CON2 = 0;
+    AD1CON3 = 0x1F02;
+    AD1CHS = 0x0005;               // Wybór kanału AN5
+    AD1CON1bits.ADON = 1;          // Włączenie ADC
+}
+
+// Odczyt wartości z potencjometru
+unsigned int read_adc(void) {
+    AD1CON1bits.SAMP = 1;
+    __delay_us(10);
+    AD1CON1bits.SAMP = 0;
+    while (!AD1CON1bits.DONE);
+    return ADC1BUF0 & 0x03FF;
+}
+
+int main(void) {
+    // Zmienne sterujące działaniem programów
+    uint8_t portValue = 0x07;  // wartość portu dla wężyka
+    uint8_t queue = 0x80;      // wartość portu dla kolejki
+    uint8_t queueDir = 0;      // kierunek: 0 = w prawo, 1 = w lewo
+    uint8_t snakeIdx = 0;      // indeks do snakeTable
+
+    char program = 0;          // numer aktywnego programu
+
+    char current6 = 0, prev6 = 0;   // stany przycisku RD6
+    char current13 = 0, prev13 = 0; // stany przycisku RD13
+
+    init(); // inicjalizacja
+
+    while (1) {
+        // odczyt ADC i ustalenie szybkości
+        unsigned int adc_val = read_adc();
+        unsigned char speed_level = read_speed_level(adc_val);
+        unsigned long delay = get_delay_from_level(speed_level);
+
+        // wykonanie aktywnego podprogramu
+        switch (program) {
+            case 0: // Program 0: wężyk
+                LATA = snakeTable[snakeIdx++];
+                if (snakeIdx >= sizeof(snakeTable)) snakeIdx = 0;
+                break;
+
+            case 1: // Program 1: kolejka
+                LATA = queue;
+                if (queueDir == 0) {
+                    queue >>= 1;
+                    if (queue == 0x01) queueDir = 1;
+                } else {
+                    queue <<= 1;
+                    if (queue == 0x80) queueDir = 0;
+                }
+                break;
+        }
+
+        // odczyt stanu przycisków z opóźnieniem
+        prev6 = PORTDbits.RD6;
+        prev13 = PORTDbits.RD13;
+        __delay32(delay); // sterowane potencjometrem
+        current6 = PORTDbits.RD6;
+        current13 = PORTDbits.RD13;
+
+        // Przycisk RD6: następny program
+        if (prev6 == 1 && current6 == 0) {
+            program = (program + 1) % 2;
+            portValue = 0x07;
+            snakeIdx = 0;
+            queue = 0x80;
+            queueDir = 0;
+        }
+
+        // Przycisk RD13: poprzedni program
+        if (prev13 == 1 && current13 == 0) {
+            program = (program == 0) ? 1 : 0;
+            portValue = 0x07;
+            snakeIdx = 0;
+            queue = 0x80;
+            queueDir = 0;
+        }
+    }
+
+    return 0;
+}
