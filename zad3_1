@@ -3,17 +3,14 @@
 #include <stdint.h>
 #include <libpic30.h>
 
-// =========================
-// Konfiguracja mikrokontrolera
-// =========================
+
 #pragma config POSCMOD = NONE, FNOSC = FRC
 #pragma config FCKSM = CSDCMD, IESO = OFF, OSCIOFNC = OFF
 #pragma config WDTPS = PS32768, FWPSA = PR128, FWDTEN = OFF, WINDIS = ON
 #pragma config ICS   = PGx2, GWRP = OFF,  GCP = OFF,  JTAGEN = OFF
 
-// =========================
+
 // Stałe i zmienne
-// =========================
 #define ALARM_THRESHOLD 512  // połowa zakresu 10-bitowego ADC (0–1023)
 #define LED_BLINK_TIME_MS 500
 #define ALARM_BLINK_DURATION_MS 5000
@@ -29,9 +26,8 @@ static void delayMs(uint16_t ms);
 static void waitBlink(uint16_t ms);
 static uint8_t isButtonPressed(void);
 
-// =========================
+
 // Inicjalizacja
-// =========================
 static void initIO(void)
 {
     TRISA = 0x0000; // wszystkie wyjścia
@@ -88,9 +84,8 @@ static uint8_t isButtonPressed(void)
     return pressed;
 }
 
-// =========================
+
 // Główna pętla
-// =========================
 int main(void)
 {
     initIO();
