@@ -18,7 +18,7 @@ static const uint8_t snakeTable[] = {0x07,0x0E,0x1C,0x38,0x70,0xE0,0x70,0x38,0x1
 static volatile uint8_t mode = 0;
 static volatile uint8_t snakeIdx = 0;
 
-// Kolejka:
+
 static volatile uint8_t queueTemp = 0;
 static volatile uint8_t iq = 7;
 static volatile uint8_t queueKon = 0;
@@ -74,15 +74,13 @@ static void updateSpeed(uint16_t adc)
     else if (adc < 820)  idx = 3;
     else                 idx = 4;
 
-    newPR1 = periodTable[idx]; // tylko zaktualizuj wartość docelową
+    newPR1 = periodTable[idx]; 
 }
 
 
 static inline void resetState(void)
 {
     snakeIdx = 0;
-
-    // reset kolejki
     queueTemp = 0;
     iq = 7;
     queueKon = 0;
@@ -94,7 +92,7 @@ static inline void readButtons(void)
 {
     uint8_t nowS3 = PORTDbits.RD6;
     uint8_t nowS4 = PORTDbits.RD13;
-    __delay32(15000); // debounce
+    __delay32(15000); 
 
     if (prevS3 && !nowS3) {
         mode = (mode == 1) ? 0 : 1;
@@ -121,12 +119,12 @@ static inline void kontrolaKolejki(void)
 void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void)
 {
     switch (mode) {
-        case 0: // Wężyk
+        case 0: 
             LATA = snakeTable[snakeIdx++];
             if (snakeIdx >= sizeof(snakeTable)) snakeIdx = 0;
             break;
 
-        case 1: // Kolejka dokładnie jak w Zadaniu 1
+        case 1: 
             queueMove = (uint8_t)(1 << queueTemp);
             if (queueTemp == iq) {
                 queueKon = 255 - ((1 << iq) - 1);
@@ -143,7 +141,7 @@ void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void)
     }
     
     if (PR1 != newPR1) {
-        PR1 = newPR1; // zmiana tylko w przerwaniu
+        PR1 = newPR1; 
     }
 
     _T1IF = 0;
