@@ -1,0 +1,176 @@
+#define FCY 4000000UL          
+#include <xc.h>
+#include <stdint.h>
+#include <libpic30.h>
+#include <math.h>
+
+#pragma config POSCMOD = NONE, FNOSC = FRC
+#pragma config FCKSM = CSDCMD, IESO = OFF, OSCIOFNC = OFF
+#pragma config WDTPS = PS32768, FWPSA = PR128, FWDTEN = OFF, WINDIS = ON
+#pragma config ICS   = PGx2, GWRP = OFF,  GCP = OFF,  JTAGEN = OFF
+
+static const uint16_t periodTable[5] = {    
+    0x0320, 0x0640, 0x0C80, 0x12C0, 0x1F40
+};
+
+static const uint8_t snakeTable[] = {0x07,0x0E,0x1C,0x38,0x70,0xE0,0x70,0x38,0x1C,0x0E,0x07};
+
+static volatile uint8_t mode = 0;
+static volatile uint8_t snakeIdx = 0;
+
+// Kolejka:
+static volatile uint8_t queueTemp = 0;
+static volatile uint8_t iq = 7;
+static volatile uint8_t queueKon = 0;
+static volatile uint8_t queueMove = 0;
+
+static uint8_t prevS3 = 1, prevS4 = 1;
+
+static void initIO(void);
+static void initTimer1(void);
+static void initADC(void);
+static uint16_t readPot(void);
+static void updateSpeed(uint16_t adc);
+static inline void readButtons(void);
+static inline void resetState(void);
+static inline void kontrolaKolejki(void);
+
+volatile uint16_t newPR1 = 0;
+
+
+static void initIO(void)
+{
+    TRISA = 0x0000;
+    TRISD |= (1<<6) | (1<<13);
+    TRISBbits.TRISB5 = 1;
+    AD1PCFG = 0xFFFF;
+    AD1PCFGbits.PCFG5 = 0;
+}
+
+static void initADC(void)
+{
+    AD1CON1 = 0;
+    AD1CON2 = 0;
+    AD1CON3 = 0x1F02;
+    AD1CHS  = 0x0005;
+    AD1CON1bits.ADON = 1;
+}
+
+static uint16_t readPot(void)
+{
+    AD1CON1bits.SAMP = 1;
+    __delay_us(10);
+    AD1CON1bits.SAMP = 0;
+    while (!AD1CON1bits.DONE);
+    return ADC1BUF0 & 0x03FF;
+}
+
+static void updateSpeed(uint16_t adc)
+{
+    uint8_t idx;
+    if      (adc < 205)  idx = 0;
+    else if (adc < 410)  idx = 1;
+    else if (adc < 615)  idx = 2;
+    else if (adc < 820)  idx = 3;
+    else                 idx = 4;
+
+    newPR1 = periodTable[idx]; // tylko zaktualizuj wartość docelową
+}
+
+
+static inline void resetState(void)
+{
+    snakeIdx = 0;
+
+    // reset kolejki
+    queueTemp = 0;
+    iq = 7;
+    queueKon = 0;
+    queueMove = 0;
+    LATA = 0;
+}
+
+static inline void readButtons(void)
+{
+    uint8_t nowS3, nowS4;
+    __delay32(15000);          // najpierw czekamy
+    nowS3 = PORTDbits.RD6;     // potem sprawdzamy stan ustabilizowany
+    nowS4 = PORTDbits.RD13;
+
+    if (prevS3 && !nowS3) {
+        mode = (mode == 1) ? 0 : 1;
+        resetState();
+    }
+    if (prevS4 && !nowS4) {
+        mode = (mode == 0) ? 1 : 0;
+        resetState();
+    }
+    prevS3 = nowS3;
+    prevS4 = nowS4;
+}
+
+static inline void kontrolaKolejki(void)
+{
+    if (queueTemp > 8) queueTemp = 0;
+    if (iq == 0) {
+        iq = 7;
+        queueTemp = 0;
+        queueKon = 0;
+    }
+}
+
+void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void)
+{
+    switch (mode) {
+        case 0: // Wężyk
+            LATA = snakeTable[snakeIdx++];
+            if (snakeIdx >= sizeof(snakeTable)) snakeIdx = 0;
+            break;
+
+        case 1: // Kolejka dokładnie jak w Zadaniu 1
+            queueMove = (uint8_t)(1 << queueTemp);
+            if (queueTemp == iq) {
+                queueKon = 255 - ((1 << iq) - 1);
+                iq--;
+                queueMove = 0;
+                queueTemp = 0;
+                LATA = queueKon;
+            } else {
+                LATA = queueKon + queueMove;
+                queueTemp++;
+            }
+            kontrolaKolejki();
+            break;
+    }
+    
+    if (PR1 != newPR1) {
+        PR1 = newPR1; // zmiana tylko w przerwaniu
+    }
+
+    _T1IF = 0;
+    
+}
+
+static void initTimer1(void)
+{
+    T1CON = 0x8030;
+    TMR1  = 0;
+    PR1   = periodTable[2];
+    _T1IF = 0;
+    _T1IP = 1;
+    _T1IE = 1;
+}
+
+int main(void)
+{
+    initIO();
+    initADC();
+    initTimer1();
+
+    while (1)
+    {
+        readButtons();
+        uint16_t adc = readPot();
+        updateSpeed(adc);
+    }
+}
