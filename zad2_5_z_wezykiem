@@ -1,0 +1,218 @@
+/*  --------------------------------------------------------------------
+    Program:  dwa-podprogramy + 5 prędkości sterowane potencjometrem
+              (wężyk identyczny jak w referencyjnym przykładzie)
+    MCU:      dsPIC33/PIC24
+    Fcy:      4 MHz (FRC, preskaler 1:256)
+    ------------------------------------------------------------------ */
+#define FCY 4000000UL
+#include <xc.h>
+#include <stdint.h>
+#include <libpic30.h>
+
+/* --- konfiguracja fuzji -------------------------------------------- */
+#pragma config POSCMOD = NONE
+#pragma config OSCIOFNC = OFF
+#pragma config FCKSM  = CSDCMD
+#pragma config FNOSC  = FRC
+#pragma config IESO   = OFF
+
+#pragma config WDTPS = PS32768
+#pragma config FWPSA = PR128
+#pragma config WINDIS = ON
+#pragma config FWDTEN = OFF
+#pragma config ICS    = PGx2
+#pragma config GWRP   = OFF
+#pragma config GCP    = OFF
+#pragma config JTAGEN = OFF
+
+/* --- stałe ---------------------------------------------------------- */
+static const uint16_t periodTable[5] = { 0x0320, 0x0640, 0x0C80, 0x12C0, 0x1F40 };
+
+/* --- typy ----------------------------------------------------------- */
+typedef enum { MODE_SNAKE = 0, MODE_QUEUE } tMode;
+
+/* --- zmienne współdzielone ----------------------------------------- */
+static volatile tMode   mode = MODE_SNAKE;
+
+/* wężyk (left–right 3-bit) */
+static volatile uint8_t snakePos  = 0;   /* 0-5  */
+static volatile int8_t  snakeStep = 1;   /* +1/-1 */
+
+/* kolejka */
+static volatile uint8_t queueTemp = 0;
+static volatile uint8_t iq        = 7;
+static volatile uint8_t queueKon  = 0;
+static volatile uint8_t queueMove = 0;
+
+/* prędkość / timer */
+static volatile uint16_t newPR1 = 0;
+static volatile uint8_t  do_step = 0;
+
+/* --- prototypy ------------------------------------------------------ */
+static void initIO(void);
+static void initADC(void);
+static void initTimer1(void);
+static void initCN(void);
+static uint16_t readPot(void);
+static void updateSpeed(uint16_t adc);
+static inline void resetState(void);
+static inline void kontrolaKolejki(void);
+
+/* =======================  Inicjalizacja HW  ========================= */
+static void initIO(void)
+{
+    TRISA = 0x0000;        /* LED-y */
+    LATA  = 0x0000;
+
+    TRISD |= (1u<<6) | (1u<<13);  /* RD6, RD13 = wejścia (przyciski) */
+
+    TRISBbits.TRISB5 = 1;         /* RB5 = potencjometr (AN5)        */
+    AD1PCFG          = 0xFFFF;
+    AD1PCFGbits.PCFG5 = 0;        /* RB5 analog                      */
+}
+
+static void initADC(void)
+{
+    AD1CON1 = 0;
+    AD1CON2 = 0;
+    AD1CON3 = 0x1F02;             /* Tad = 2 Tcy, SAMC = 31          */
+    AD1CHS  = 0x0005;             /* CH0 = AN5                       */
+    AD1CON1bits.ADON = 1;
+}
+
+static void initTimer1(void)
+{
+    T1CON = 0x8030;               /* Timer1 on, preskaler 1:256      */
+    TMR1  = 0;
+    PR1   = periodTable[2];       /* środkowa prędkość               */
+    newPR1 = PR1;
+
+    _T1IF = 0;  _T1IP = 1;  _T1IE = 1;
+}
+
+static void initCN(void)
+{
+    volatile uint16_t dummy = PORTD; /* kasuj mismatch               */
+
+    CNEN2bits.CN16IE = 1;         /* RD6  – NEXT                    */
+    CNEN2bits.CN19IE = 1;         /* RD13 – PREV                    */
+
+    _CNIF = 0;  _CNIP = 2;  _CNIE = 1;
+    (void)dummy;
+}
+
+/* =======================  Funkcje pomocnicze  ======================= */
+static uint16_t readPot(void)
+{
+    AD1CON1bits.SAMP = 1;
+    __delay_us(6);                /* (>5,4 µs)                       */
+    AD1CON1bits.SAMP = 0;
+    while(!AD1CON1bits.DONE);
+    return ADC1BUF0 & 0x03FF;
+}
+
+static void updateSpeed(uint16_t adc)
+{
+    uint8_t idx =
+        (adc < 205u) ? 0 :
+        (adc < 410u) ? 1 :
+        (adc < 615u) ? 2 :
+        (adc < 820u) ? 3 : 4;
+
+    newPR1 = periodTable[idx];
+}
+
+static inline void resetState(void)
+{
+    /* wężyk */
+    snakePos  = 0;
+    snakeStep = 1;
+
+    /* kolejka */
+    queueTemp = 0;
+    iq = 7;
+    queueKon = 0;
+    queueMove = 0;
+
+    LATA = 0;
+}
+
+static inline void kontrolaKolejki(void)
+{
+    if(iq == 0u) { iq = 7; queueTemp = 0; queueKon = 0; }
+}
+
+/* ============================  ISR-y  =============================== */
+void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void)
+{
+    do_step = 1;                      /* sygnał do pętli głównej      */
+
+    if(PR1 != newPR1) {               /* ewentualna zmiana okresu     */
+        PR1  = newPR1;
+        TMR1 = 0;
+    }
+    _T1IF = 0;
+}
+
+void __attribute__((interrupt, no_auto_psv)) _CNInterrupt(void)
+{
+    __delay32(15000);                 /* debounce (~3,75 ms)          */
+    uint8_t rd6  = PORTDbits.RD6;
+    uint8_t rd13 = PORTDbits.RD13;
+
+    if(!rd6) {                        /* NEXT                         */
+        mode = (tMode)((mode + 1) % 2);
+        resetState();
+    }
+    else if(!rd13) {                  /* PREV                         */
+        mode = (mode == MODE_SNAKE) ? MODE_QUEUE : MODE_SNAKE;
+        resetState();
+    }
+    _CNIF = 0;
+}
+
+/* ============================  main()  ============================== */
+int main(void)
+{
+    initIO();
+    initADC();
+    initTimer1();
+    initCN();
+
+    while(1)
+    {
+        updateSpeed(readPot());       /* 5 prędkości potentiometrem   */
+
+        if(do_step) {                 /* Timer1 „tyknął”              */
+            do_step = 0;
+
+            switch(mode)
+            {
+                /* -------- wężyk -------- */
+                case MODE_SNAKE:
+                    snakePos += snakeStep;
+                    if(snakePos == 5u || snakePos == 0u)
+                        snakeStep = -snakeStep;      /* odbicie        */
+                    LATA = (uint8_t)(0x07u << snakePos);
+                    break;
+
+                /* -------- kolejka ------- */
+                case MODE_QUEUE:
+                    queueMove = (uint8_t)(1u << queueTemp);
+
+                    if(queueTemp == iq) {
+                        queueKon |= queueMove;
+                        iq--;
+                        queueTemp = 0;
+                    }
+                    else {
+                        queueKon |= queueMove;
+                        queueTemp++;
+                    }
+                    LATA = queueKon;
+                    kontrolaKolejki();
+                    break;
+            }
+        }
+    }
+}
