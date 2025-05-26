@@ -1,144 +1,111 @@
-/*
- *  File:   main.c
- *  Autor:  <Twoje imię i nazwisko / nr albumu>
- *  Opis:   Dwa podprogramy (wężyk, kolejka) przełączane RD6/RD13.
- *          Częstotliwość – 5 poziomów z potencjometru (AN5).
- *          Logika w pętli głównej; przerwanie T1 tylko sygnalizuje takt.
- */
-
-#define FCY 4000000UL            // Fosc/2 = 4 MHz
+#define FCY 4000000UL          
 #include <xc.h>
-#include <libpic30.h>
 #include <stdint.h>
-#include <math.h>
+#include <libpic30.h>
 
-/*-----------------------------  KONFIGURACJA  -----------------------------*/
 #pragma config POSCMOD = NONE, FNOSC = FRC
-#pragma config FCKSM  = CSDCMD, IESO  = OFF, OSCIOFNC = OFF
-#pragma config WDTPS  = PS32768, FWPSA = PR128, FWDTEN = OFF, WINDIS = ON
-#pragma config ICS    = PGx2,   GWRP  = OFF,  GCP = OFF,  JTAGEN = OFF
+#pragma config FCKSM = CSDCMD, IESO = OFF, OSCIOFNC = OFF
+#pragma config WDTPS = PS32768, FWPSA = PR128, FWDTEN = OFF, WINDIS = ON
+#pragma config ICS   = PGx2, GWRP = OFF,  GCP = OFF,  JTAGEN = OFF
 
-/*-------------------------  TABLICE I STAŁE  ------------------------------*/
-static const uint16_t periodTable[5] = {        // okresy timera 1 (preskaler 1:256)
-    0x0320, 0x0640, 0x0C80, 0x12C0, 0x1F40     // ≈ 50 ms … 0,5 s
+static const uint16_t periodTable[5] = {    
+    0x0320, 0x0640, 0x0C80, 0x12C0, 0x1F40
 };
 
-/*---------------------------  ZMIENNE GLOBALNE  ---------------------------*/
-volatile uint8_t  tick = 0;     // flaga: 1 = kolejny krok animacji
-volatile uint16_t newPR1 = 0;   // żądany okres z ADC
+volatile uint8_t tick = 0;  
+volatile uint16_t newPR1 = 0;
 
-/*— tryb pracy —*/
-static int8_t  mode = 0;        // 0 = wężyk, 1 = kolejka
+static volatile uint8_t mode = 0;
 
-/*— wężyk —*/
-static uint8_t snakePos  = 0;   // pozycja (0-5)
-static int8_t  snakeStep = +1;  // kierunek (+1 / –1)
+/*— Wężyk poprawiony (płynnie odbijający) —*/
+static uint8_t snakePos = 0;
+static int8_t snakeStep = 1;
 
 /*— kolejka —*/
-static uint8_t queueTemp = 0;
-static uint8_t iq        = 7;
-static uint8_t queueKon  = 0;
-static uint8_t queueMove = 0;
+static volatile uint8_t queueTemp = 0;
+static volatile uint8_t iq = 7;
+static volatile uint8_t queueKon = 0;
+static volatile uint8_t queueMove = 0;
 
-/*— anty-drgania —*/
+/*— anty-drgania przycisków —*/
 static uint8_t prevS3 = 1, prevS4 = 1;
 
-/*------------------------  DEKLARACJE FUNKCJI  ----------------------------*/
+/*— Funkcje —*/
 static void initIO(void);
+static void initTimer1(void);
 static void initADC(void);
-static void initTimer1(uint16_t pr);
 static uint16_t readPot(void);
-static void     updateSpeed(uint16_t adc);
-static void     readButtons(void);
-static void     resetState(void);
-static void     kontrolaKolejki(void);
-static void     animate(void);
+static void updateSpeed(uint16_t adc);
+static inline void readButtons(void);
+static inline void resetState(void);
+static inline void kontrolaKolejki(void);
+static void animate(void);
 
-/*----------------------------  INICJALIZACJA  -----------------------------*/
 static void initIO(void)
 {
-    TRISA = 0x0000;                       // LED-y = wyjście
-    TRISD |= (1<<6) | (1<<13);            // RD6, RD13 = wejścia (przyciski)
-    TRISBbits.TRISB5 = 1;                 // AN5 jako wejście
-    AD1PCFG = 0xFFFF;                     // wszystkie cyfrowe
-    AD1PCFGbits.PCFG5 = 0;                // AN5 analogowy
+    TRISA = 0x0000;
+    TRISD |= (1<<6) | (1<<13);
+    TRISBbits.TRISB5 = 1;
+    AD1PCFG = 0xFFFF;
+    AD1PCFGbits.PCFG5 = 0;
 }
 
 static void initADC(void)
 {
     AD1CON1 = 0;
     AD1CON2 = 0;
-    AD1CON3 = 0x1F02;     // Tad ≈ 500 ns
-    AD1CHS  = 0x0005;     // kanał = AN5
+    AD1CON3 = 0x1F02;
+    AD1CHS  = 0x0005;
     AD1CON1bits.ADON = 1;
 }
 
-static void initTimer1(uint16_t pr)
-{
-    T1CON = 0x8030;       // ON, preskaler 1:256
-    TMR1  = 0;
-    PR1   = pr;
-    _T1IF = 0;
-    _T1IP = 1;
-    _T1IE = 1;
-}
-
-/*-------------------------  PRZERWANIE TIMERA 1  --------------------------*/
-void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void)
-{
-    tick = 1;             // sygnał dla pętli głównej
-    _T1IF = 0;            // skasowanie flagi
-}
-
-/*-------------------------  FUNKCJE POMOCNICZE  ---------------------------*/
 static uint16_t readPot(void)
 {
     AD1CON1bits.SAMP = 1;
     __delay_us(10);
     AD1CON1bits.SAMP = 0;
     while (!AD1CON1bits.DONE);
-    return ADC1BUF0 & 0x03FF;             // 10 bitów
+    return ADC1BUF0 & 0x03FF;
 }
 
 static void updateSpeed(uint16_t adc)
 {
-    uint8_t idx = adc / 205;              // 0–4
-    if (idx > 4) idx = 4;
-    newPR1 = periodTable[idx];
+    uint8_t idx;
+    if      (adc < 205)  idx = 0;
+    else if (adc < 410)  idx = 1;
+    else if (adc < 615)  idx = 2;
+    else if (adc < 820)  idx = 3;
+    else                 idx = 4;
+
+    newPR1 = periodTable[idx]; 
 }
 
 static inline void resetState(void)
 {
-    snakePos  = 0;
+    snakePos = 0;
     snakeStep = +1;
 
     queueTemp = 0;
-    iq        = 7;
-    queueKon  = 0;
+    iq = 7;
+    queueKon = 0;
     queueMove = 0;
-
     LATA = 0;
 }
 
-static void readButtons(void)
+static inline void readButtons(void)
 {
     uint8_t nowS3 = PORTDbits.RD6;
     uint8_t nowS4 = PORTDbits.RD13;
-    __delay32(15000);                      // ~3,75 ms @4 MHz
+    __delay32(15000); 
 
-    /* RD6 = następny program */
     if (prevS3 && !nowS3) {
-        mode++;
+        mode = (mode == 1) ? 0 : 1;
         resetState();
     }
-    /* RD13 = poprzedni program */
     if (prevS4 && !nowS4) {
-        mode--;
+        mode = (mode == 0) ? 1 : 0;
         resetState();
     }
-    if (mode > 1) mode = 0;
-    if (mode < 0) mode = 1;
-
     prevS3 = nowS3;
     prevS4 = nowS4;
 }
@@ -147,63 +114,70 @@ static inline void kontrolaKolejki(void)
 {
     if (queueTemp > 8) queueTemp = 0;
     if (iq == 0) {
-        iq        = 7;
+        iq = 7;
         queueTemp = 0;
-        queueKon  = 0;
+        queueKon = 0;
     }
 }
 
-/*----------------------------  ANIMACJE LED  ------------------------------*/
+void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void)
+{
+    tick = 1;  // tylko ustawienie flagi
+
+    if (PR1 != newPR1) {
+        PR1 = newPR1; 
+    }
+
+    _T1IF = 0;
+}
+
+static void initTimer1(void)
+{
+    T1CON = 0x8030;
+    TMR1  = 0;
+    PR1   = periodTable[2];
+    _T1IF = 0;
+    _T1IP = 1;
+    _T1IE = 1;
+}
+
 static void animate(void)
 {
-    switch (mode)
-    {
-        /* 0 – wężyk (3-bity) */
-        case 0:
-            snakePos += snakeStep;
-            if (snakePos == 5 || snakePos == 0)
-                snakeStep = -snakeStep;               // odbicie
-            LATA = (0x07u << snakePos);               // maska 3-bitowa
-            break;
-
-        /* 1 – kolejka  */
-        case 1:
-            queueMove = (uint8_t)(1 << queueTemp);
-            if (queueTemp == iq) {
-                queueKon   = 255 - ((1 << iq) - 1);
-                iq--;
-                queueMove  = 0;
-                queueTemp  = 0;
-                LATA       = queueKon;
-            } else {
-                LATA = queueKon + queueMove;
-                queueTemp++;
-            }
-            kontrolaKolejki();
-            break;
+    if (mode == 0) {  // wężyk (płynne odbicie)
+        snakePos += snakeStep;
+        if (snakePos == 5 || snakePos == 0) {
+            snakeStep = -snakeStep;  
+        }
+        LATA = (0x07u << snakePos);
+    } else {          // kolejka
+        queueMove = (uint8_t)(1 << queueTemp);
+        if (queueTemp == iq) {
+            queueKon = 255 - ((1 << iq) - 1);
+            iq--;
+            queueMove = 0;
+            queueTemp = 0;
+            LATA = queueKon;
+        } else {
+            LATA = queueKon + queueMove;
+            queueTemp++;
+        }
+        kontrolaKolejki();
     }
 }
 
-/*-------------------------------  MAIN  -----------------------------------*/
 int main(void)
 {
     initIO();
     initADC();
-    initTimer1(periodTable[2]);           // startowa prędkość = środkowa
+    initTimer1();
 
     while (1)
     {
-        readButtons();                    // obsługa RD6/RD13
+        readButtons();
 
-        uint16_t adc = readPot();         // potencjometr
+        uint16_t adc = readPot();
         updateSpeed(adc);
 
-        /* jeśli trzeba – zaktualizuj okres timera */
-        if (PR1 != newPR1) {
-            PR1 = newPR1;
-        }
-
-        /* krok animacji co przerwanie T1 */
         if (tick) {
             tick = 0;
             animate();
