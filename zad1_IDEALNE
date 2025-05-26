@@ -1,0 +1,295 @@
+/* 
+ *  File:   main.c
+ *  Author: local
+ *  169405 Oleksandr Hrypas 
+ *  Created on 7 kwietnia 2025, 9:58
+ *
+ */
+
+//----------------------------------------------------------------------------
+//  KONFIGURACJA
+//----------------------------------------------------------------------------
+#pragma config POSCMOD = NONE       // Primary Oscillator Select (HS Oscillator mode selected)
+#pragma config OSCIOFNC = OFF       // Primary Oscillator Output Function (OSC2/CLKO/RC15 functions as CLKO (FOSC/2))
+#pragma config FCKSM = CSDCMD       // Clock Switching and Monitor (disabled)
+#pragma config FNOSC = FRC          // Oscillator Select (FRC)
+#pragma config IESO = OFF           // Internal External Switch Over Mode (disabled)
+
+// CONFIG1
+#pragma config WDTPS = PS32768      // Watchdog Timer Postscaler (1:32,768)
+#pragma config FWPSA = PR128        // WDT Prescaler (1:128)
+#pragma config WINDIS = ON          // Standard Watchdog Timer
+#pragma config FWDTEN = OFF         // Watchdog Timer disabled
+#pragma config ICS = PGx2           // Comm Channel Select
+#pragma config GWRP = OFF           // General Code Segment Write Protect (disabled)
+#pragma config GCP = OFF            // General Code Segment Code Protect (disabled)
+#pragma config JTAGEN = OFF         // JTAG Port Enable (disabled)
+
+
+//----------------------------------------------------------------------------
+//  BIBLIOTEKI
+//----------------------------------------------------------------------------
+#include "xc.h"
+#include <libpic30.h>
+#include <stdint.h>                 
+#include <math.h>
+
+
+
+//  DEFINICJE I ZMIENNE GLOBALNE
+#define BIT_VALUE(value,noBit) (((value) >> (noBit)) & 1)
+
+//Zmienne używane w liczeniu, przechowywaniu stanów, itp.
+unsigned  portValue   = 0;  // Bieżąca wartość wysyłana na PORTA w trybach bin./Gray.
+unsigned  bcdValue    = 0;  // Licznik w systemie BCD (0–99).
+uint8_t   snakePos    = 0;      // 0 – 5
+int8_t    snakeStep   = +1;     // kierunek
+unsigned  queueMove   = 0;  // Sterowanie efektem „kolejki”.
+unsigned  queueTemp   = 0;  // |
+unsigned  tens        = 0;  // |
+unsigned  ones        = 0;  // |
+unsigned  queueKon    = 0;  // |
+unsigned  iq          = 7;  // |
+
+//Zmienne do obsługi przycisków
+char prevFirst     = 1;     // Detekcja zbocza (1→0) przycisków – poprzedni RD6. // FIX (was 6)
+char prevSecond    = 1;     // Poprzedni RD13.                                     // FIX (was 7)
+char currentFirst  = 1;     // Bieżący stan RD6.
+char currentSecond = 1;     // Bieżący stan RD13.
+char program       = 0;     // Aktualnie wybrany tryb 0–8.
+
+//Zmienne do generatora pseudolosowego 
+uint8_t generator = 0b111001; // Rejestr LFSR (6 bitów).                           // FIX – nowy
+int     val = 1;              // pozostały po starej wersji (nieużywany, zostawiony dla kompatybilności)
+int     xor = 0;
+
+//Flaga ustawiana w przerwaniu 
+volatile uint8_t tick = 0;  // 1 = czas na wykonanie kolejnego kroku animacji
+
+
+
+//  FUNKCJA SPRZĘŻENIA
+/*  Zwraca XOR wybranych bitów rejestru v według maski 0b1110011 (tap’y LFSR).
+ *  Wynik jest dopisywany jako MSB przy każdej iteracji, generując sekwencję
+ *  pseudolosową (255-elementowy cykl).  (pozostawiona na wypadek użycia) */
+int sprzezenie(unsigned int v)
+{
+    return  BIT_VALUE(v,0)     // tap 0
+          ^ BIT_VALUE(v,1)     // tap 1
+          ^ BIT_VALUE(v,2)     // tap 2
+          ^ BIT_VALUE(v,4)     // tap 4
+          ^ BIT_VALUE(v,5);    // tap 5  
+}
+
+
+
+//----------------------------------------------------------------------------
+//  PROTOTYPUJEMY FUNKCJE POMOCNICZE
+//----------------------------------------------------------------------------
+void resetStates(void);        // FIX – zerowanie stanów po zmianie programu
+
+
+
+void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void)
+{
+    tick = 1;             // sygnał do pętli głównej
+    _T1IF = 0;            // skasowanie flagi przerwania
+}
+
+
+
+//----------------------------------------------------------------------------
+//  FUNKCJE POMOCNICZE DO OBSŁUGI PRZYCISKÓW I ZAKRESÓW
+//----------------------------------------------------------------------------
+
+//  Resetuje wszystkie liczniki/generatory gdy zmieniamy program
+void resetStates(void)   // FIX – nowa funkcja
+{
+    portValue = 0;
+    bcdValue  = 0;
+    snakePos  = 0;       // wężyk pokaże 0x0E przy pierwszym kroku
+    snakeStep = +1;
+    queueMove = 0;
+    queueTemp = 0;
+    tens      = 0;
+    ones      = 0;
+    queueKon  = 0;
+    iq        = 7;
+    generator = 0b111001;   // restart LFSR
+}
+
+
+
+//  Odczyt i obsługa przycisków (teraz pełna detekcja zbocza + swap ról)  // FIX
+void odczytajPrzyciski(void)
+{
+    // Odczyt aktualnego stanu przycisków
+    currentFirst  = PORTDbits.RD6;
+    currentSecond = PORTDbits.RD13;
+
+    __delay32(15000);               // eliminacja drgań styków
+
+    // Ponowny odczyt w celu potwierdzenia stabilnego stanu
+    currentFirst  = PORTDbits.RD6;
+    currentSecond = PORTDbits.RD13;
+
+    // RD6 – NASTĘPNY program (rola przycisków zamieniona)                   // FIX
+    if (prevFirst && !currentFirst)  { program++; resetStates(); }
+
+    // RD13 – POPRZEDNI program                                              // FIX
+    if (prevSecond && !currentSecond){ program--; resetStates(); }
+
+    // Zapamiętanie stanów na następną iterację
+    prevFirst  = currentFirst;
+    prevSecond = currentSecond;
+}
+
+
+
+// Sprawdzanie numeru programu (cyklicznie 0–8) 
+void sprawdzZakresProgramu(void)
+{
+    if (program > 8) program = 0;
+    if (program < 0) program = 8;
+}
+
+// Zmienna pomocnicza dla kodu BCD 
+void kontrolaBCD(void)
+{
+    if (bcdValue > 99) bcdValue = 1;
+    if (bcdValue == 0) bcdValue = 99;
+}
+
+// Kontrola parametrów kolejki 
+void kontrolaKolejki(void)
+{
+    if (queueTemp > 8) queueTemp = 0;
+    if (iq == 0)
+    {
+        iq        = 7;
+        queueTemp = 0;
+        queueKon  = 0;
+    }
+}
+
+
+
+//----------------------------------------------------------------------------
+//  GŁÓWNY SILNIK PROGRAMÓW
+//----------------------------------------------------------------------------
+void wykonajProgram(void)
+{
+    switch (program)
+    {
+        // 1. Licznik binarny od 0 do 255 
+        case 0:
+            LATA = ++portValue;
+            break;
+
+        // 2. Licznik binarny od 255 do 0 
+        case 1:
+            LATA = --portValue;
+            break;
+
+        // 3. Licznik w kodzie Graya od 0 do 255 
+        case 2:
+            portValue++;
+            LATA = (portValue >> 1) ^ portValue;
+            break;
+
+        // 4. Licznik w kodzie Graya od 255 do 0 
+        case 3:
+            portValue--;
+            LATA = (portValue >> 1) ^ portValue;
+            break;
+
+        // 5. Licznik BCD od 0 do 99 
+        case 4:
+            bcdValue++;
+            ones = bcdValue % 10;
+            tens = (bcdValue - ones) / 10;
+            LATA = (tens << 4) + ones;    // 4 starsze bity = dziesiątki
+            break;
+
+        // 6. Licznik BCD od 99 do 0 
+        case 5:
+            bcdValue--;
+            ones = bcdValue % 10;
+            tens = (bcdValue - ones) / 10;
+            LATA = (tens << 4) + ones;
+            break;
+
+        // 7. Wężyk poruszający się lewo-prawo (3-bitowy) 
+        // 7. Wężyk poruszający się lewo-prawo (3-bitowy)
+        case 6:
+            LATA = (0x07u << snakePos);     // najpierw pokaż bieżącą pozycję   // FIX
+            snakePos += snakeStep;          // dopiero teraz przygotuj następną // FIX
+            if (snakePos == 5 || snakePos == 0)
+                snakeStep = -snakeStep;     // odbicie od „ściany”
+            break;
+
+
+        // 8. Kolejka 
+        case 7:
+            queueMove = (1U << queueTemp);
+            if (queueTemp == iq)
+            {
+                queueKon   = 255 - ((1U << iq) - 1);
+                iq--;
+                queueMove  = 0;
+                queueTemp  = 0;
+                LATA       = queueKon;
+            }
+            else
+            {
+                LATA = queueKon + queueMove;
+                queueTemp++;
+            }
+            break;
+
+        // 9. Generator liczb pseudolosowych 6-bitowy 111001 → 000000         // FIX
+        case 8:
+            /*  taps 5 i 4 – jak w przykładzie z zadania  */
+            generator = ( (generator >> 1)
+                        | (((generator >> 5) ^ (generator >> 4)) & 1) << 5 )
+                        & 0x3F;     // maska 6 bitów
+            LATA = generator;
+            break;
+    }
+}
+
+
+
+//----------------------------------------------------------------------------
+//  FUNKCJA MAIN
+//----------------------------------------------------------------------------
+int main(void)
+{
+    // Ustawienia portów 
+    TRISA = 0x0000;    // PORTA jako wyjście
+    TRISD = 0xFFFF;    // PORTD jako wejście
+
+    // Konfiguracja Timera1
+    T1CON = 0x8030;    // Timer włączony, preskaler 1:256
+    _T1IE = 1;         // Zezwolenie na przerwanie
+    _T1IP = 1;         // Priorytet przerwania
+    PR1   = 0x0FFF;    // Okres przerwań
+
+    resetStates();     // FIX – start z wyzerowanymi licznikami
+
+    while (1)
+    {
+        odczytajPrzyciski();   // pełna obsługa przycisków
+        sprawdzZakresProgramu();
+        kontrolaBCD();
+        kontrolaKolejki();
+
+        // Jeżeli ISR ustawił flagę – wykonujemy kolejny krok animacji 
+        if (tick)
+        {
+            tick = 0;
+            wykonajProgram();
+        }
+    }
+    return 0;
+}
