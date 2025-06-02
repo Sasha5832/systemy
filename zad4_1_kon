@@ -1,0 +1,84 @@
+/*
+ * File:   main.c
+ * Author: local
+ * 169405 Oleksandr Hrypas 
+ * Created on 7 kwietnia 2025, 9:58
+ */
+
+#pragma config POSCMOD  = XT          // Primary Oscillator Select
+#pragma config OSCIOFNC = ON          // Clock Output Pin Active on OSCO
+#pragma config FCKSM    = CSDCMD      // Clock Switching / Fail-Safe Clock Monitor
+#pragma config FNOSC    = PRI         // Oscillator Select
+#pragma config IESO     = ON          // Internal External Switch-over
+#pragma config WDTPS    = PS32768     // Watchdog Post-Scaler
+#pragma config FWPSA    = PR128       // WDT Prescaler
+#pragma config WINDIS   = ON          // WDT Window
+#pragma config FWDTEN   = ON          // Watchdog Enable
+#pragma config ICS      = PGx2        // In-Circuit Debugger Channel
+#pragma config GWRP     = OFF         // Flash Write-protect
+#pragma config GCP      = OFF         // Flash Code-protect
+#pragma config JTAGEN   = OFF         // Disable JTAG
+
+
+#include <xc.h>        // rejestry i definicje XC16
+#include <string.h>    // strlen, strncpy, memset
+#include "buttons.h"   // obsługa przycisków
+#include "lcd.h"       // sterownik
+
+
+#define SCROLL_DELAY_CYCLES  1500000UL   // opóźnienie między krokami
+#define VIEWPORT_WIDTH       16          // znaków widocznych naraz
+
+
+static void SetupSystem   (void);
+static void SplashScroll  (void);
+static void IlluminateIO  (void);
+static void RunMainMenu   (void);
+
+
+static void SetupSystem(void)
+{
+    LCD_Initialize();      
+}
+
+static void SplashScroll(void)
+{
+    const char *scrollText =
+        "  MEGA OKAZJA!  Zestaw Arduino UNO R3 + czujniki za 9999 zl"
+        "  >> www.arduino.pl <<  LICZBA SZTUK OGRANICZONA!   ";
+    
+
+    const size_t textLen = strlen(scrollText);
+    char viewport[VIEWPORT_WIDTH + 1];   
+
+    for (size_t pos = 0; pos < textLen; ++pos)
+    {
+        memset(viewport, 0, sizeof viewport);
+        strncpy(viewport, &scrollText[pos], VIEWPORT_WIDTH);
+
+        LCD_ClearScreen();
+        LCD_PutString(viewport, strlen(viewport));
+
+        __delay32(SCROLL_DELAY_CYCLES);
+    }
+}
+
+static void IlluminateIO(void)
+{
+    AD1PCFG = 0xFFFF;
+    TRISA   = 0x0000;
+    LATA    = 0xFFFF;
+}
+
+static void RunMainMenu(void)
+{
+    SplashScroll();
+}
+
+
+int main(void)
+{
+    SetupSystem();
+    RunMainMenu();
+    return 0;
+}
