@@ -31,11 +31,11 @@
 #define PIN_BTN1 6         
 #define PIN_BTN2 13       
 
-volatile unsigned int  czas1 = 0, czas2 = 0;   // sekundy pozostałe
-volatile unsigned char aktywny    = 1;         // 1 - gracz1, 2 - gracz2
-volatile unsigned char odswiez    = 0;         // flaga LCD
-volatile unsigned char koniecCzasu= 0;         // sygnał TIME OUT
-volatile unsigned char przegrany  = 0;         // numer gracza
+volatile unsigned int  czas1 = 0, czas2 = 0;   
+volatile unsigned char aktywny    = 1;        
+volatile unsigned char odswiez    = 0;        
+volatile unsigned char koniecCzasu= 0;      
+volatile unsigned char przegrany  = 0;   
 
 
 volatile uint8_t debounce_btn1 = 0;
