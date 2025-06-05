@@ -20,10 +20,10 @@
 #pragma config JTAGEN   = OFF         // Disable JTAG
 
 
-#include <xc.h>        // rejestry i definicje XC16
-#include <string.h>    // strlen, strncpy, memset
-#include "buttons.h"   // obsługa przycisków
-#include "lcd.h"       // sterownik
+#include <xc.h>        
+#include <string.h>
+#include "buttons.h"
+#include "lcd.h" 
 
 
 #define SCROLL_DELAY_CYCLES  1500000UL   // opóźnienie między krokami
