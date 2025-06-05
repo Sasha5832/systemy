@@ -22,7 +22,6 @@
 
 #include <xc.h>        
 #include <string.h>
-#include "buttons.h"
 #include "lcd.h" 
 
 
