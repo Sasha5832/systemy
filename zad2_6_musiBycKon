@@ -122,7 +122,7 @@ static inline void kontrolaKolejki(void)
 
 void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void)
 {
-    tick = 1;  // tylko ustawienie flagi
+    tick = 1;
 
     if (PR1 != newPR1) {
         PR1 = newPR1; 
@@ -143,13 +143,13 @@ static void initTimer1(void)
 
 static void animate(void)
 {
-    if (mode == 0) {  // wężyk (płynne odbicie)
+    if (mode == 0) { 
         snakePos += snakeStep;
         if (snakePos == 5 || snakePos == 0) {
             snakeStep = -snakeStep;  
         }
         LATA = (0x07u << snakePos);
-    } else {          // kolejka
+    } else {          
         queueMove = (uint8_t)(1 << queueTemp);
         if (queueTemp == iq) {
             queueKon = 255 - ((1 << iq) - 1);
