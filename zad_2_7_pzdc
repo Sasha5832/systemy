@@ -16,7 +16,6 @@ volatile uint8_t tick = 0;
 volatile uint16_t newPR1 = 0;
 volatile uint8_t mode = 0;
 
-// Przechowuje informację, czy zmieniono tryb w przerwaniu
 volatile uint8_t btnS3Flag = 0;
 volatile uint8_t btnS4Flag = 0;
 
@@ -30,7 +29,6 @@ static volatile uint8_t iq = 7;
 static volatile uint8_t queueKon = 0;
 static volatile uint8_t queueMove = 0;
 
-// Debouncing
 #define DEBOUNCE_TIME_MS 50
 volatile uint16_t debounceCounterS3 = 0;
 volatile uint16_t debounceCounterS4 = 0;
@@ -48,11 +46,10 @@ static void initCN(void);
 static void initIO(void)
 {
     TRISA = 0x0000;
-    TRISD |= (1<<6) | (1<<13);   // RD6, RD13 jako wejścia (przyciski)
+    TRISD |= (1<<6) | (1<<13);   
     TRISBbits.TRISB5 = 1;
     AD1PCFG = 0xFFFF;
     AD1PCFGbits.PCFG5 = 0;
-    // Pull-up jeśli konieczne: CNPUDbits.CNPUD6 = 1; CNPUDbits.CNPUD13 = 1;
 }
 
 static void initADC(void)
@@ -109,13 +106,12 @@ static inline void kontrolaKolejki(void)
 
 void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void)
 {
-    tick = 1;  // tylko ustawienie flagi
+    tick = 1; 
 
     if (PR1 != newPR1) {
         PR1 = newPR1; 
     }
 
-    // Debouncing liczników (co ok. 1ms jeśli T1 co 1ms)
     if (debounceCounterS3 > 0) debounceCounterS3--;
     if (debounceCounterS4 > 0) debounceCounterS4--;
 
@@ -124,24 +120,21 @@ void __attribute__((interrupt, no_auto_psv)) _T1Interrupt(void)
 
 static void initTimer1(void)
 {
-    T1CON = 0x8030;         // Preskaler 1:256, Timer on
+    T1CON = 0x8030;        
     TMR1  = 0;
-    PR1   = periodTable[2]; // startowa wartość
+    PR1   = periodTable[2]; 
     _T1IF = 0;
     _T1IP = 1;
     _T1IE = 1;
 }
 
-// CN przerwanie na zmianę stanu wejść RD6 i RD13
 void __attribute__((interrupt, no_auto_psv)) _CNInterrupt(void)
 {
-    // S3: RD6, S4: RD13
-    // Sprawdzamy czy debounce pozwala na obsługę
-    if (PORTDbits.RD6 == 0 && debounceCounterS3 == 0) { // przycisk wciśnięty
+    if (PORTDbits.RD6 == 0 && debounceCounterS3 == 0) { 
         btnS3Flag = 1;
         debounceCounterS3 = DEBOUNCE_TIME_MS;
     }
-    if (PORTDbits.RD13 == 0 && debounceCounterS4 == 0) { // przycisk wciśnięty
+    if (PORTDbits.RD13 == 0 && debounceCounterS4 == 0) { 
         btnS4Flag = 1;
         debounceCounterS4 = DEBOUNCE_TIME_MS;
     }
@@ -150,9 +143,8 @@ void __attribute__((interrupt, no_auto_psv)) _CNInterrupt(void)
 
 static void initCN(void)
 {
-    CNEN2bits.CN16IE = 1;   // RD6 (CN16)
-    CNEN2bits.CN19IE = 1;   // RD13 (CN19)
-    // Jeśli używasz starszego/dłuższego PIC24, sprawdź dokumentację do CNx!
+    CNEN2bits.CN16IE = 1;   
+    CNEN2bits.CN19IE = 1;   
     IFS1bits.CNIF = 0;
     IEC1bits.CNIE = 1;
     IPC4bits.CNIP = 4;
@@ -160,13 +152,13 @@ static void initCN(void)
 
 static void animate(void)
 {
-    if (mode == 0) {  // wężyk (płynne odbicie)
+    if (mode == 0) {  
         snakePos += snakeStep;
         if (snakePos == 5 || snakePos == 0) {
             snakeStep = -snakeStep;  
         }
         LATA = (0x07u << snakePos);
-    } else {          // kolejka
+    } else {          
         queueMove = (uint8_t)(1 << queueTemp);
         if (queueTemp == iq) {
             queueKon = 255 - ((1 << iq) - 1);
@@ -191,7 +183,6 @@ int main(void)
 
     while (1)
     {
-        // Obsługa flag przycisków ustawionych w przerwaniu
         if (btnS3Flag) {
             btnS3Flag = 0;
             mode = (mode == 1) ? 0 : 1;
