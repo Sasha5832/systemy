@@ -31,7 +31,6 @@
 
 static void SetupSystem   (void);
 static void SplashScroll  (void);
-static void IlluminateIO  (void);
 static void RunMainMenu   (void);
 
 
@@ -62,12 +61,6 @@ static void SplashScroll(void)
     }
 }
 
-static void IlluminateIO(void)
-{
-    AD1PCFG = 0xFFFF;
-    TRISA   = 0x0000;
-    LATA    = 0xFFFF;
-}
 
 static void RunMainMenu(void)
 {
